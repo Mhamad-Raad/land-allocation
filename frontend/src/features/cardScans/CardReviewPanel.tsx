@@ -1,0 +1,197 @@
+import { AlertTriangle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
+import { toast } from "@/lib/toast";
+import { apiErrorMessage } from "@/lib/apiError";
+import { filterName } from "@/lib/name";
+import { filterPid } from "@/lib/pid";
+import { labeller } from "@/lib/fieldLabels";
+import { useFieldErrors } from "@/hooks/useFieldErrors";
+
+import { CardPreview } from "./CardPreview";
+import { CardSection } from "./CardSection";
+import { DraftFieldInput } from "./DraftFieldInput";
+import { useConfirmCardScanMutation } from "./cardScansApi";
+
+import { CARD_FIELDS, type CardScan, type ConfirmPayload } from "./types";
+
+type Values = Record<(typeof CARD_FIELDS)[number], string>;
+
+/** The confirmation's per-field server errors, handed to inputs this panel does not own. */
+type FieldState = { errors: Record<string, string>; clear: (field: string) => void };
+
+// This is where a lawyer corrects what the OCR proposed, so each field takes exactly what its
+// twin on the intake form takes — the card's number is a national ID like any other, and a name
+// here is no more allowed a digit than one typed by hand (UC-127). The OCR *draft* is untouched:
+// a digit the engine read off the card still arrives, to be seen and corrected.
+const FILTERS: Partial<Record<(typeof CARD_FIELDS)[number], (raw: string) => string>> = {
+  pid: filterPid,
+  full_name: filterName,
+  mother_full_name: filterName,
+};
+
+const EMPTY: Values = { full_name: "", pid: "", mother_full_name: "", date_of_birth: "" };
+
+/** The scan on the left, the fields it proposes on the right — check, correct, confirm (§6.4). */
+export function CardReviewPanel({
+  scan,
+  extra,
+  below,
+  onConfirmed,
+  buildPayload,
+}: {
+  scan: CardScan;
+  /** Case-level inputs the card cannot supply (phone, address, the spouse block).
+   *
+   * A **render prop**, not a node: confirming writes those fields too, so the server can reject
+   * one — and the error state lives here, with the mutation that produced it. Passed a plain
+   * node, they were the only inputs on this screen that could not turn red, which is the exact
+   * gap this whole change exists to close.
+   */
+  extra?: (fieldState: FieldState) => React.ReactNode;
+  /** Sections under this card and above the confirmation — the spouse's card, in its own box. */
+  below?: (fieldState: FieldState) => React.ReactNode;
+  onConfirmed: (scan: CardScan) => void;
+  /**
+   * Everything beyond the card's own fields — which client, which lawyer, the version lock.
+   *
+   * Receives the confirmed values so the caller can vet them (the intake form runs the duplicate
+   * check on them, §5.7/UC-027), and may be async so that vetting can ask the user. Returning
+   * `null` aborts the confirmation.
+   */
+  buildPayload: (
+    values: Values,
+  ) => Promise<Omit<ConfirmPayload, keyof Values> | null> | Omit<ConfirmPayload, keyof Values> | null;
+}) {
+  const { t } = useTranslation();
+  const [confirm, { isLoading }] = useConfirmCardScanMutation();
+  const { errors, setFromError, clear } = useFieldErrors();
+  const [values, setValues] = useState<Values>(EMPTY);
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  const fields = scan.draft?.fields ?? {};
+  const warnings = scan.draft?.warnings ?? [];
+
+  // Pre-fill from the reading once it arrives; the human edits freely from there.
+  useEffect(() => {
+    setValues({
+      full_name: fields.full_name?.value ?? "",
+      pid: fields.pid?.value ?? "",
+      mother_full_name: fields.mother_full_name?.value ?? "",
+      date_of_birth: fields.date_of_birth?.value ?? "",
+    });
+    setAcknowledged(false);
+    // Re-fill only when a different reading arrives, never on every keystroke.
+  }, [scan.id, scan.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const complete = useMemo(
+    () => CARD_FIELDS.every((name) => values[name].trim().length > 0),
+    [values],
+  );
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const rest = await buildPayload(values);
+    if (!rest) return;
+    try {
+      const confirmed = await confirm({
+        id: scan.id,
+        ...values,
+        date_of_birth: values.date_of_birth || null,
+        ...rest,
+      }).unwrap();
+      toast.success(t("cardScan.confirmed"));
+      onConfirmed(confirmed);
+    } catch (err) {
+      // Confirming creates the client, the case and the filed document in one transaction (§6.5),
+      // so a single bad field loses the whole act — the lawyer has to be told which one.
+      setFromError(err);
+      toast.error(apiErrorMessage(err, t("cardScan.confirmError"), labeller(t), t));
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-6">
+      <CardSection title={t("cardScan.beneficiarySection")}>
+        <CardPreview scanId={scan.id} />
+
+        {/* Beside the scan: what it says, editable. */}
+        <div className="space-y-4">
+          {scan.status === "failed" ? (
+            <Notice title={t("cardScan.readingFailedTitle")}>
+              {t("cardScan.readingFailedBody")}
+            </Notice>
+          ) : null}
+
+          {warnings.map((warning) => (
+            <Notice key={warning}>
+              {warning}
+            </Notice>
+          ))}
+
+          {CARD_FIELDS.map((name) => (
+            <DraftFieldInput
+              key={name}
+              name={name}
+              label={t(`cardScan.field.${name}`)}
+              value={values[name]}
+              draft={fields[name]}
+              type={name === "date_of_birth" ? "date" : "text"}
+              required
+              error={errors[name]}
+              filter={FILTERS[name]}
+              onChange={(value) => {
+                clear(name);
+                setValues((current) => ({ ...current, [name]: value }));
+              }}
+            />
+          ))}
+
+          {extra?.({ errors, clear })}
+        </div>
+      </CardSection>
+
+      {below?.({ errors, clear })}
+
+      {/* Under every card, since it confirms all of them; lined up with the fields column. */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4 lg:col-start-2">
+          {/* §6.4: the match warning must be acknowledged before anything is written. */}
+          <label className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
+            <Checkbox
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>{t("cardScan.matchWarning")}</span>
+          </label>
+
+          <Button type="submit" disabled={!acknowledged || !complete || isLoading} className="w-full">
+            {isLoading ? <Spinner /> : null}
+            {t("cardScan.confirmAndSave")}
+          </Button>
+          {!complete ? (
+            <p className="text-xs text-muted-foreground">{t("cardScan.fillEveryField")}</p>
+          ) : null}
+        </div>
+      </div>
+    </form>
+  );
+}
+
+/** Everything a reading has to say for itself is a caution, so there is only one tone. */
+function Notice({ title, children }: { title?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+      <div>
+        {title ? <p className="font-medium">{title}</p> : null}
+        <p className="text-muted-foreground">{children}</p>
+      </div>
+    </div>
+  );
+}

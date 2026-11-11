@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!--
+    The app's own mark: the same rounded primary-coloured badge and Lucide `Landmark` glyph the
+    sidebar shows (`Sidebar.tsx`), so the browser tab matches the screen it opens. Replaces the
+    purple Vite starter logo that shipped in It.0 and was never changed.
+
+    Colours are the theme's primary / primary-foreground tokens resolved to hex. The stylesheet
+    writes them as `oklch()`, but a favicon is parsed by the browser's icon pipeline rather than
+    the page's CSS engine, so literal sRGB is the safe form here. The dark pair is the same two
+    tokens under the dark theme; a browser that ignores the media query simply keeps the light
+    badge, which is legible on either tab colour anyway.
+  -->
+  <style>
+    .badge { fill: #1c8d7a; }
+    .glyph { stroke: #f5fefc; }
+    @media (prefers-color-scheme: dark) {
+      .badge { fill: #3eb59e; }
+      .glyph { stroke: #051a16; }
+    }
+  </style>
+  <rect class="badge" width="32" height="32" rx="8" />
+  <!-- 24-unit glyph scaled to 18 and centred, so it sits in the badge at the same proportion the
+       sidebar renders it (a 20px icon in a 36px badge). Stroke widened before scaling, or it
+       disappears at 16px. -->
+  <g class="glyph" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
+     transform="translate(7 7) scale(0.75)">
+    <path d="M10 18v-7" />
+    <path d="M11.119 2.205a2 2 0 0 1 1.762 0l7.84 3.846A.5.5 0 0 1 20.5 7h-17a.5.5 0 0 1-.22-.949z" />
+    <path d="M14 18v-7" />
+    <path d="M18 18v-7" />
+    <path d="M3 22h18" />
+    <path d="M6 18v-7" />
+  </g>
+</svg>
